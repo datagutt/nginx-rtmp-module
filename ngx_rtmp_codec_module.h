@@ -42,12 +42,23 @@ enum {
     NGX_RTMP_VIDEO_ON2_VP6_ALPHA    = 5,
     NGX_RTMP_VIDEO_SCREEN2          = 6,
     NGX_RTMP_VIDEO_H264             = 7,
+    /* Non standard legacy FLV extension (codec id 12) used by most Chinese
+     * CDNs and encoders. Tag layout is identical to AVC with an
+     * HEVCDecoderConfigurationRecord as sequence header. */
+    NGX_RTMP_VIDEO_H265             = 12,
     NGX_RTMP_VIDEO_HEVC             = 0x68766331 // h v c 1
 };
 
 
 u_char * ngx_rtmp_get_audio_codec_name(ngx_uint_t id);
 u_char * ngx_rtmp_get_video_codec_name(ngx_uint_t id);
+
+
+static ngx_inline ngx_uint_t
+ngx_rtmp_codec_is_hevc(ngx_uint_t id)
+{
+    return id == NGX_RTMP_VIDEO_H265 || id == NGX_RTMP_VIDEO_HEVC;
+}
 
 
 typedef struct {

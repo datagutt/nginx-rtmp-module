@@ -1221,7 +1221,7 @@ ngx_rtmp_record_node_avd(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
             return NGX_OK;
         }
 
-        if (codec_ctx && (codec_ctx->video_codec_id == NGX_RTMP_VIDEO_HEVC) &&
+        if (codec_ctx && ngx_rtmp_codec_is_hevc(codec_ctx->video_codec_id) &&
             !rctx->hevc_header_sent)
         {
             ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
@@ -1231,7 +1231,7 @@ ngx_rtmp_record_node_avd(ngx_rtmp_session_t *s, ngx_rtmp_record_rec_ctx_t *rctx,
 
 
         if (ngx_rtmp_get_video_frame_type(in) == NGX_RTMP_VIDEO_KEY_FRAME &&
-            ((codec_ctx && (codec_ctx->video_codec_id != NGX_RTMP_VIDEO_H264 && codec_ctx->video_codec_id != NGX_RTMP_VIDEO_HEVC)) ||
+            ((codec_ctx && (codec_ctx->video_codec_id != NGX_RTMP_VIDEO_H264 && !ngx_rtmp_codec_is_hevc(codec_ctx->video_codec_id))) ||
              !ngx_rtmp_is_codec_header(in)))
         {
             rctx->video_key_sent = 1;

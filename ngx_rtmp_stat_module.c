@@ -431,6 +431,23 @@ ngx_rtmp_stat_get_avc_profile(ngx_uint_t p) {
 }
 
 
+static char *
+ngx_rtmp_stat_get_hevc_profile(ngx_uint_t p) {
+    switch (p) {
+        case 1:
+            return "Main";
+        case 2:
+            return "Main 10";
+        case 3:
+            return "Main Still Picture";
+        case 4:
+            return "Range Extensions";
+        default:
+            return "";
+    }
+}
+
+
 static void
 ngx_rtmp_stat_live(ngx_http_request_t *r, ngx_chain_t ***lll,
         ngx_rtmp_live_app_conf_t *lacf)
@@ -590,6 +607,21 @@ ngx_rtmp_stat_live(ngx_http_request_t *r, ngx_chain_t ***lll,
                     NGX_RTMP_STAT(buf, ngx_snprintf(buf, sizeof(buf),
                                   "%.1f", codec->avc_level / 10.) - buf);
                     NGX_RTMP_STAT_L("</level>");
+                }
+                if (ngx_rtmp_codec_is_hevc(codec->video_codec_id)) {
+                    if (codec->hevc_profile) {
+                        NGX_RTMP_STAT_L("<profile>");
+                        NGX_RTMP_STAT_CS(ngx_rtmp_stat_get_hevc_profile(
+                                             codec->hevc_profile));
+                        NGX_RTMP_STAT_L("</profile>");
+                    }
+                    if (codec->hevc_level) {
+                        /* general_level_idc is 30 times the level number */
+                        NGX_RTMP_STAT_L("<level>");
+                        NGX_RTMP_STAT(buf, ngx_snprintf(buf, sizeof(buf),
+                                      "%.1f", codec->hevc_level / 30.) - buf);
+                        NGX_RTMP_STAT_L("</level>");
+                    }
                 }
                 NGX_RTMP_STAT_L("</video>");
 

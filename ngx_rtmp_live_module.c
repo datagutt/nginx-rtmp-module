@@ -821,7 +821,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             header = codec_ctx->aac_header;
 
             if (lacf->interleave) {
-                coheader = codec_ctx->video_codec_id == NGX_RTMP_VIDEO_HEVC ? codec_ctx->hevc_header : codec_ctx->avc_header;
+                coheader = ngx_rtmp_codec_is_hevc(codec_ctx->video_codec_id) ? codec_ctx->hevc_header : codec_ctx->avc_header;
             }
 
             if (codec_ctx->audio_codec_id == NGX_RTMP_AUDIO_AAC &&
@@ -832,14 +832,14 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             }
 
         } else {
-            header = codec_ctx->video_codec_id == NGX_RTMP_VIDEO_HEVC ? codec_ctx->hevc_header : codec_ctx->avc_header;
+            header = ngx_rtmp_codec_is_hevc(codec_ctx->video_codec_id) ? codec_ctx->hevc_header : codec_ctx->avc_header;
 
             if (lacf->interleave) {
                 coheader = codec_ctx->aac_header;
             }
 
             if ((codec_ctx->video_codec_id == NGX_RTMP_VIDEO_H264 ||
-                 codec_ctx->video_codec_id == NGX_RTMP_VIDEO_HEVC) &&
+                 ngx_rtmp_codec_is_hevc(codec_ctx->video_codec_id)) &&
                 ngx_rtmp_is_codec_header(in))
             {
                 prio = 0;

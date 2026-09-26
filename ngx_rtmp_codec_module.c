@@ -16,6 +16,9 @@
 #define NGX_RTMP_CODEC_META_ON      1
 #define NGX_RTMP_CODEC_META_COPY    2
 
+#define NGX_RTMP_CODEC_HEVC_NAL_SPS         33
+#define NGX_RTMP_CODEC_HEVC_HEADER_MAX      1024
+
 
 static void * ngx_rtmp_codec_create_app_conf(ngx_conf_t *cf);
 static char * ngx_rtmp_codec_merge_app_conf(ngx_conf_t *cf,
@@ -32,6 +35,8 @@ static void ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s,
        ngx_chain_t *in);
 static void ngx_rtmp_codec_parse_hevc_header(ngx_rtmp_session_t *s,
        ngx_chain_t *in);
+static ngx_int_t ngx_rtmp_codec_parse_hevc_sps(ngx_rtmp_session_t *s,
+       u_char *pos, u_char *last);
 
 
 #if (NGX_DEBUG)
@@ -126,6 +131,10 @@ video_codecs[] = {
     "On2-VP6-Alpha",
     "ScreenVideo2",
     "H264",
+    "",
+    "",
+    "",
+    "",
     "HEVC"
 };
 
@@ -319,7 +328,7 @@ ngx_rtmp_codec_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         if (ctx->video_codec_id == NGX_RTMP_VIDEO_H264) {
             header = &ctx->avc_header;
             ngx_rtmp_codec_parse_avc_header(s, in);
-        } else if (ctx->video_codec_id == NGX_RTMP_VIDEO_HEVC) {
+        } else if (ngx_rtmp_codec_is_hevc(ctx->video_codec_id)) {
             header = &ctx->hevc_header;
             ngx_rtmp_codec_parse_hevc_header(s, in);
         }
@@ -649,100 +658,230 @@ ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 static void
 ngx_rtmp_codec_parse_hevc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 {
+    /* the message may span several chunks, and SPS usually sits right after
+     * VPS, well within this size */
+    u_char                  buf[NGX_RTMP_CODEC_HEVC_HEADER_MAX];
+    size_t                  n, len;
+    ngx_uint_t              narrays, nnalus, nal_type, nal_len, i, j;
+    ngx_chain_t            *cl;
     ngx_rtmp_codec_ctx_t   *ctx;
     ngx_rtmp_bit_reader_t   br;
-    // ngx_uint_t              num_arrays, nal_unit_type, num_nalus;
-    // ngx_uint_t              i, j, width, height;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-                   "codec: parsing HEVC header");
+#if (NGX_DEBUG)
+    ngx_rtmp_codec_dump_header(s, "hevc", in);
+#endif
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
-    if (ctx == NULL) {
-        return;
+
+    for (cl = in, n = 0; cl && n < sizeof(buf); cl = cl->next) {
+        len = ngx_min((size_t) (cl->buf->last - cl->buf->pos), sizeof(buf) - n);
+        ngx_memcpy(buf + n, cl->buf->pos, len);
+        n += len;
     }
 
-    ngx_rtmp_bit_init_reader(&br, in->buf->pos, in->buf->last);
+    ngx_rtmp_bit_init_reader(&br, buf, buf + n);
 
-    /* Skip configuration version */
+    /* Legacy (codec id 12) and enhanced RTMP sequence headers both carry
+     * 5 bytes ahead of the HEVCDecoderConfigurationRecord: tag header,
+     * AVCPacketType and composition time, or ExVideoTagHeader and FourCC */
+    ngx_rtmp_bit_read(&br, 40);
+
+    /* configuration version */
     ngx_rtmp_bit_read(&br, 8);
-    // ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                "codec: HEVC config version: %ui", config_version);
 
-    /* Read profile space, tier flag, profile IDC */
-    ctx->hevc_profile = ngx_rtmp_bit_read(&br, 5);
+    /* general profile space, general tier flag */
+    ngx_rtmp_bit_read(&br, 3);
 
-    // TODO: FOLLOWING IS WIP parse HEVC header
-    // ngx_uint_t tier_flag = ngx_rtmp_bit_read(&br, 1);
-    // ctx->hevc_level = ngx_rtmp_bit_read(&br, 7);
-    // ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                "codec: HEVC profile: %ui, tier flag: %ui, level: %ui",
-    //                ctx->hevc_profile, tier_flag, ctx->hevc_level);
+    ctx->hevc_profile = (ngx_uint_t) ngx_rtmp_bit_read(&br, 5);
 
-    /* Skip some fields */
-    // ngx_uint_t general_profile_compatibility_flags = ngx_rtmp_bit_read(&br, 32);
-    // ngx_uint_t general_constraint_indicator_flags = ngx_rtmp_bit_read(&br, 12);
-    // ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                "codec: HEVC profile compatibility flags: 0x%xui, constraint indicator flags: 0x%xui",
-    //                general_profile_compatibility_flags, general_constraint_indicator_flags);
+    /* general profile compatibility flags */
+    ngx_rtmp_bit_read(&br, 32);
 
-    /* Read number of arrays */
-    // num_arrays = ngx_rtmp_bit_read(&br, 8);
-    // ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                "codec: HEVC number of arrays: %ui", num_arrays);
-    // for (i = 0; i < num_arrays; i++) {
-    //     nal_unit_type = ngx_rtmp_bit_read(&br, 5);
-    //     num_nalus = ngx_rtmp_bit_read(&br, 16);
+    /* general constraint indicator flags */
+    ngx_rtmp_bit_read(&br, 48);
 
-    //     ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                    "codec: HEVC array %ui: nal_unit_type=%ui", i, nal_unit_type);
-    //     ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                    "codec: HEVC array %ui: num_nalus=%ui", i, num_nalus);
+    ctx->hevc_level = (ngx_uint_t) ngx_rtmp_bit_read_8(&br);
 
-    //     for (j = 0; j < num_nalus; j++) {
-    //         ngx_uint_t nal_unit_length = ngx_rtmp_bit_read(&br, 16);
-    //         ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                        "codec: HEVC array %ui, nalu %ui: length=%ui", 
-    //                        i, j, nal_unit_length);
-            
-    //         if (nal_unit_type == 33) { /* SPS */
-    //             /* Parse SPS for width and height */
-    //             ngx_rtmp_bit_read(&br, 16); /* Skip nal_unit_header */
-                
-    //             /* TODO: Implement proper SPS parsing for HEVC */
-    //             /* This is a simplified example and may not work for all HEVC streams */
-    //             ngx_rtmp_bit_read(&br, 4); /* sps_video_parameter_set_id */
-    //             ngx_rtmp_bit_read(&br, 3); /* sps_max_sub_layers_minus1 */
-    //             ngx_rtmp_bit_read(&br, 1); /* sps_temporal_id_nesting_flag */
-                
-    //             /* profile_tier_level() */
-    //             ngx_rtmp_bit_read(&br, 96);
-                
-    //             /* Skip to pic_width_in_luma_samples and pic_height_in_luma_samples */
-    //             ngx_rtmp_bit_read(&br, 4); /* sps_seq_parameter_set_id */
-    //             ngx_rtmp_bit_read(&br, 4); /* chroma_format_idc */
-                
-    //             width = ngx_rtmp_bit_read(&br, 16);
-    //             height = ngx_rtmp_bit_read(&br, 16);
-                
-    //             ctx->width = width;
-    //             ctx->height = height;
-                
-    //             ngx_log_debug4(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-    //                            "codec: HEVC header parsed "
-    //                            "profile=%ui, level=%ui, width=%ui, height=%ui",
-    //                            ctx->hevc_profile, ctx->hevc_level, ctx->width, ctx->height);
-                
-    //             return; /* We've got what we need, so we can return */
-    //         }
-            
-    //         /* Skip this NAL unit */
-    //         ngx_rtmp_bit_read(&br, nal_unit_length * 8);
-    //     }
-    // }
+    /* min spatial segmentation, parallelism type, chroma format,
+     * bit depth luma, bit depth chroma */
+    ngx_rtmp_bit_read(&br, 48);
 
-    ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
-                  "codec: failed to parse HEVC header (implementation incomplete)");
+    /* avg frame rate, constant frame rate, num temporal layers,
+     * temporal id nested, length size minus one */
+    ngx_rtmp_bit_read(&br, 24);
+
+    narrays = ngx_rtmp_bit_read_8(&br);
+
+    for (i = 0; i < narrays && !br.err; i++) {
+
+        /* array completeness, reserved, nal unit type */
+        nal_type = ngx_rtmp_bit_read_8(&br) & 0x3f;
+
+        nnalus = ngx_rtmp_bit_read_16(&br);
+
+        for (j = 0; j < nnalus && !br.err; j++) {
+
+            nal_len = ngx_rtmp_bit_read_16(&br);
+
+            /* every field above is byte aligned, so the NAL unit starts
+             * exactly at br.pos */
+            if (br.err || nal_len > (ngx_uint_t) (br.last - br.pos)) {
+                br.err = 1;
+                break;
+            }
+
+            if (nal_type == NGX_RTMP_CODEC_HEVC_NAL_SPS) {
+
+                if (ngx_rtmp_codec_parse_hevc_sps(s, br.pos, br.pos + nal_len)
+                    != NGX_OK)
+                {
+                    break;
+                }
+
+                ngx_log_debug4(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
+                               "codec: hevc header "
+                               "profile=%ui, level=%ui, width=%ui, height=%ui",
+                               ctx->hevc_profile, ctx->hevc_level,
+                               ctx->width, ctx->height);
+                return;
+            }
+
+            br.pos += nal_len;
+        }
+    }
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+                  "codec: failed to parse hevc sequence header");
+}
+
+
+static ngx_int_t
+ngx_rtmp_codec_parse_hevc_sps(ngx_rtmp_session_t *s, u_char *pos,
+    u_char *last)
+{
+    u_char                  rbsp[NGX_RTMP_CODEC_HEVC_HEADER_MAX];
+    size_t                  n;
+    ngx_uint_t              zeros, max_sub_layers, profile_present,
+                            level_present, chroma_format_idc, width, height,
+                            sub_width, sub_height, crop_left, crop_right,
+                            crop_top, crop_bottom, i;
+    ngx_rtmp_codec_ctx_t   *ctx;
+    ngx_rtmp_bit_reader_t   br;
+
+    ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
+
+    /* Unlike AVC, HEVC SPS almost always contains emulation prevention bytes
+     * since profile_tier_level() is full of zero flags. They must be
+     * dropped before reading exp-Golomb values. */
+    for (n = 0, zeros = 0; pos < last && n < sizeof(rbsp); pos++) {
+
+        if (zeros >= 2 && *pos == 0x03) {
+            zeros = 0;
+            continue;
+        }
+
+        zeros = (*pos == 0 ? zeros + 1 : 0);
+        rbsp[n++] = *pos;
+    }
+
+    ngx_rtmp_bit_init_reader(&br, rbsp, rbsp + n);
+
+    /* nal unit header */
+    ngx_rtmp_bit_read(&br, 16);
+
+    /* sps video parameter set id */
+    ngx_rtmp_bit_read(&br, 4);
+
+    max_sub_layers = (ngx_uint_t) ngx_rtmp_bit_read(&br, 3);
+
+    /* temporal id nesting flag */
+    ngx_rtmp_bit_read(&br, 1);
+
+    /* profile_tier_level: general profile (88 bits), general level idc */
+    ngx_rtmp_bit_read(&br, 64);
+    ngx_rtmp_bit_read(&br, 24);
+    ngx_rtmp_bit_read(&br, 8);
+
+    profile_present = 0;
+    level_present = 0;
+
+    for (i = 0; i < max_sub_layers; i++) {
+        profile_present |= (ngx_uint_t) ngx_rtmp_bit_read(&br, 1) << i;
+        level_present |= (ngx_uint_t) ngx_rtmp_bit_read(&br, 1) << i;
+    }
+
+    if (max_sub_layers > 0) {
+        for (i = max_sub_layers; i < 8; i++) {
+
+            /* reserved zero 2 bits */
+            ngx_rtmp_bit_read(&br, 2);
+        }
+    }
+
+    for (i = 0; i < max_sub_layers; i++) {
+
+        if (profile_present & (1u << i)) {
+
+            /* sub layer profile (88 bits) */
+            ngx_rtmp_bit_read(&br, 64);
+            ngx_rtmp_bit_read(&br, 24);
+        }
+
+        if (level_present & (1u << i)) {
+
+            /* sub layer level idc */
+            ngx_rtmp_bit_read(&br, 8);
+        }
+    }
+
+    /* sps seq parameter set id */
+    ngx_rtmp_bit_read_golomb(&br);
+
+    chroma_format_idc = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+
+    if (chroma_format_idc == 3) {
+
+        /* separate colour plane flag */
+        ngx_rtmp_bit_read(&br, 1);
+    }
+
+    width = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+    height = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+
+    /* conformance window */
+    if (ngx_rtmp_bit_read(&br, 1)) {
+
+        crop_left = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+        crop_right = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+        crop_top = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+        crop_bottom = (ngx_uint_t) ngx_rtmp_bit_read_golomb(&br);
+
+    } else {
+
+        crop_left = 0;
+        crop_right = 0;
+        crop_top = 0;
+        crop_bottom = 0;
+    }
+
+    if (br.err) {
+        return NGX_ERROR;
+    }
+
+    /* SubWidthC and SubHeightC, ITU-T H.265 table 6-1 */
+    sub_width = (chroma_format_idc == 1 || chroma_format_idc == 2) ? 2 : 1;
+    sub_height = (chroma_format_idc == 1) ? 2 : 1;
+
+    if (sub_width * (crop_left + crop_right) >= width
+        || sub_height * (crop_top + crop_bottom) >= height)
+    {
+        return NGX_ERROR;
+    }
+
+    ctx->width = width - sub_width * (crop_left + crop_right);
+    ctx->height = height - sub_height * (crop_top + crop_bottom);
+
+    return NGX_OK;
 }
 
 
