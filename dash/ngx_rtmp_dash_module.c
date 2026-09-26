@@ -315,7 +315,6 @@ ngx_rtmp_dash_write_playlist(ngx_rtmp_session_t *s)
         return NGX_ERROR;
     }
 
-
 #define NGX_RTMP_DASH_MANIFEST_HEADER                                          \
     "<?xml version=\"1.0\"?>\n"                                                \
     "<MPD\n"                                                                   \
@@ -353,9 +352,9 @@ ngx_rtmp_dash_write_playlist(ngx_rtmp_session_t *s)
     "          height=\"%ui\"\n"                                               \
     "          frameRate=\"%s\"\n"                                             \
     "          sar=\"1:1\"\n"                                                  \
+    "          startWithSAP=\"1\"\n"                                           \
     "          bandwidth=\"%ui\">\n"                                           \
     "        <SegmentTemplate\n"                                               \
-    "            presentationTimeOffset=\"0\"\n"                               \
     "            timescale=\"1000\"\n"                                         \
     "            media=\"%V%s$Time$.m4v\"\n"                                   \
     "            initialization=\"%V%sinit.m4v\">\n"                           \
@@ -389,7 +388,6 @@ ngx_rtmp_dash_write_playlist(ngx_rtmp_session_t *s)
     "          audioSamplingRate=\"%ui\"\n"                                    \
     "          bandwidth=\"%ui\">\n"                                           \
     "        <SegmentTemplate\n"                                               \
-    "            presentationTimeOffset=\"0\"\n"                               \
     "            timescale=\"1000\"\n"                                         \
     "            media=\"%V%s$Time$.m4a\"\n"                                   \
     "            initialization=\"%V%sinit.m4a\">\n"                           \
@@ -1201,6 +1199,11 @@ ngx_rtmp_dash_update_fragments(ngx_rtmp_session_t *s, ngx_int_t boundary,
 
         f->duration = timestamp - f->timestamp;
         hit = (f->duration >= dacf->fraglen);
+
+        /* keep fragment lengths within 2x factor for dash.js  */
+        if (f->duration >= dacf->fraglen * 2) {
+            boundary = 1;
+        }
 
     } else {
 

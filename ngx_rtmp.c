@@ -107,6 +107,13 @@ ngx_rtmp_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 #else
     modules = ngx_modules;
 #endif
+
+#if (nginx_version >= 1009011)
+
+    ngx_rtmp_max_module = ngx_count_modules(cf->cycle, NGX_RTMP_MODULE);
+
+#else
+
     ngx_rtmp_max_module = 0;
     for (m = 0; modules[m]; m++) {
         if (modules[m]->type != NGX_RTMP_MODULE) {
@@ -115,6 +122,8 @@ ngx_rtmp_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
         modules[m]->ctx_index = ngx_rtmp_max_module++;
     }
+
+#endif
 
 
     /* the rtmp main_conf context, it is the same in the all rtmp contexts */
@@ -635,6 +644,8 @@ ngx_rtmp_optimize_servers(ngx_conf_t *cf, ngx_array_t *ports)
 #if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
             ls->ipv6only = addr[i].ipv6only;
 #endif
+
+            ls->wildcard = addr[i].wildcard;
 
             mport = ngx_palloc(cf->pool, sizeof(ngx_rtmp_port_t));
             if (mport == NULL) {
