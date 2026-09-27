@@ -1013,7 +1013,7 @@ rtmp_relay_ssl_server_name on;
 Syntax: `rtmp_relay_ssl_verify on | off;`  
 Context: rtmp, server, application  
 
-Enables or disables verification of the RTMPS server certificate. Note you must set the rtmp_relay_ssl_trusted_certificate. Default is on.   
+Enables or disables verification of the RTMPS server certificate. Without rtmp_relay_ssl_trusted_certificate the system default CA store of OpenSSL is used. Default is on.   
 ```sh
 rtmp_relay_ssl_verify on;
 ```
@@ -1031,7 +1031,7 @@ rtmp_relay_ssl_verify_depth 1;
 Syntax: `rtmp_relay_ssl_trusted_certificate file;`  
 Context: rtmp, server, application  
 
-Specifies a file with trusted CA certificates in the PEM format used to verify the certificate of the RTMPS server. No default set.  
+Specifies a file with trusted CA certificates in the PEM format used to verify the certificate of the RTMPS server. When not set, the system default CA store of OpenSSL is used.  
 ```sh
 rtmp_relay_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
 ```

@@ -2280,15 +2280,26 @@ ngx_rtmp_relay_configure_ssl(ngx_conf_t *cf, ngx_rtmp_relay_app_conf_t *racf,
 
         if (target->ssl_verify) {
             if (racf->ssl_trusted_certificate.len == 0) {
-                ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                        "relay: no rtmp_relay_ssl_trusted_certificate for rtmp_relay_ssl_verify");
-                return NGX_ERROR;
-            }
 
-            if (ngx_ssl_trusted_certificate(cf, target->ssl,
-                                            &racf->ssl_trusted_certificate,
-                                            racf->ssl_verify_depth)
-                != NGX_OK)
+                /* The notify module builds this context for every
+                 * on_publish application in case the callback redirects to
+                 * rtmps, so requiring an explicit CA file here would break
+                 * all such configs. The system store keeps verification on
+                 * without extra configuration. */
+                SSL_CTX_set_verify_depth(target->ssl->ctx,
+                                         racf->ssl_verify_depth);
+
+                if (SSL_CTX_set_default_verify_paths(target->ssl->ctx) == 0) {
+                    ngx_ssl_error(NGX_LOG_EMERG, cf->log, 0,
+                                  "relay: SSL_CTX_set_default_verify_paths() "
+                                  "failed");
+                    return NGX_ERROR;
+                }
+
+            } else if (ngx_ssl_trusted_certificate(cf, target->ssl,
+                                                   &racf->ssl_trusted_certificate,
+                                                   racf->ssl_verify_depth)
+                       != NGX_OK)
             {
                 return NGX_ERROR;
             }
