@@ -34,6 +34,13 @@ static ngx_int_t ngx_rtmp_hls_ensure_directory(ngx_rtmp_session_t *s,
 #ifndef NGX_RTMP_HLS_BUFSIZE
 #define NGX_RTMP_HLS_BUFSIZE            (16*1024*1024)
 #endif
+
+
+#ifndef NGX_RTMP_HLS_SEI_BUFSIZE
+#define NGX_RTMP_HLS_SEI_BUFSIZE        (64*1024)
+#endif
+
+
 /* Allow access to www-data (web-server) and others too */
 #define NGX_RTMP_HLS_DIR_ACCESS         0755
 
@@ -83,6 +90,8 @@ typedef struct {
 
     ngx_buf_t                          *aframe;
     uint64_t                            aframe_pts;
+
+    ngx_buf_t                          *sei;    /* AnnexB, awaiting a picture */
 
     ngx_rtmp_hls_variant_t             *var;
 } ngx_rtmp_hls_ctx_t;
@@ -1450,7 +1459,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     ngx_rtmp_hls_ctx_t             *ctx;
     u_char                         *p, *pp;
     ngx_rtmp_hls_frag_t            *f;
-    ngx_buf_t                      *b;
+    ngx_buf_t                      *b, *sei;
     size_t                          len;
     ngx_rtmp_hls_variant_t         *var;
     ngx_uint_t                      n;
@@ -1479,14 +1488,20 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 
         f = ctx->frags;
         b = ctx->aframe;
+        sei = ctx->sei;
 
         ngx_memzero(ctx, sizeof(ngx_rtmp_hls_ctx_t));
 
         ctx->frags = f;
         ctx->aframe = b;
+        ctx->sei = sei;
 
         if (b) {
             b->pos = b->last = b->start;
+        }
+
+        if (sei) {
+            sei->pos = sei->last = sei->start;
         }
     }
 
@@ -2038,14 +2053,16 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_hls_app_conf_t        *hacf;
     ngx_rtmp_hls_ctx_t             *ctx;
     ngx_rtmp_codec_ctx_t           *codec_ctx;
-    u_char                         *p;
+    u_char                         *p, *payload;
     uint8_t                         fmt, ftype, htype, nal_type, src_nal_type;
     uint32_t                        len, rlen;
+    size_t                          n;
     ngx_buf_t                       out, *b;
     uint32_t                        cts;
     ngx_rtmp_mpegts_frame_t         frame;
     ngx_uint_t                      nal_bytes;
-    ngx_int_t                       aud_sent, sps_pps_sent, boundary;
+    ngx_int_t                       aud_sent, sps_pps_sent, boundary,
+                                    inband_sps, inband_pps, vcl;
     static u_char                   buffer[NGX_RTMP_HLS_BUFSIZE];
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
@@ -2107,6 +2124,10 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     nal_bytes = codec_ctx->avc_nal_bytes;
     aud_sent = 0;
     sps_pps_sent = 0;
+    inband_sps = 0;
+    inband_pps = 0;
+    vcl = 0;
+    payload = out.pos;
 
     while (in) {
         if (ngx_rtmp_hls_copy(s, &rlen, &p, nal_bytes, &in) != NGX_OK) {
@@ -2130,7 +2151,7 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                        "hls: h264 NAL type=%ui, len=%uD",
                        (ngx_uint_t) nal_type, len);
 
-        if (nal_type >= 7 && nal_type <= 9) {
+        if (nal_type == 9) {
             if (ngx_rtmp_hls_copy(s, NULL, &p, len - 1, &in) != NGX_OK) {
                 return NGX_ERROR;
             }
@@ -2142,12 +2163,13 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 case 1:
                 case 5:
                 case 6:
+                case 7:
+                case 8:
                     if (ngx_rtmp_hls_append_aud(s, &out) != NGX_OK) {
                         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                                       "hls: error appending AUD NAL");
                     }
-                    /* fall through */
-                case 9:
+                    payload = out.last;
                     aud_sent = 1;
                     break;
             }
@@ -2158,7 +2180,10 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 sps_pps_sent = 0;
                 break;
             case 5:
-                if (sps_pps_sent) {
+                /* In-band parameter sets win over the sequence header: DJI
+                 * GO sends a Baseline SPS in the sequence header while the
+                 * stream itself is High profile. */
+                if (sps_pps_sent || (inband_sps && inband_pps)) {
                     break;
                 }
                 if (ngx_rtmp_hls_append_sps_pps(s, &out) != NGX_OK) {
@@ -2167,6 +2192,29 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 }
                 sps_pps_sent = 1;
                 break;
+            case 7:
+                inband_sps = 1;
+                break;
+            case 8:
+                inband_pps = 1;
+                break;
+        }
+
+        if (nal_type >= 1 && nal_type <= 5) {
+            vcl = 1;
+
+            if (ctx->sei && ctx->sei->last > ctx->sei->pos) {
+                n = ctx->sei->last - ctx->sei->pos;
+
+                if ((size_t) (out.end - out.last) < n) {
+                    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                                  "hls: not enough buffer for SEI");
+                    return NGX_OK;
+                }
+
+                out.last = ngx_cpymem(out.last, ctx->sei->pos, n);
+                ctx->sei->pos = ctx->sei->last = ctx->sei->start;
+            }
         }
 
         /* AnnexB prefix */
@@ -2201,6 +2249,38 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         }
 
         out.last += (len - 1);
+    }
+
+    if (!vcl) {
+        /*
+         * DJI drones send SEI in a tag of its own with the timestamp of the
+         * picture that follows. Written as is it becomes an access unit
+         * without a picture sharing the DTS of the next one, which breaks
+         * players remuxing to fMP4, so it is carried into the next picture.
+         */
+        n = out.last - payload;
+
+        if (n == 0) {
+            return NGX_OK;
+        }
+
+        if (ctx->sei == NULL) {
+            ctx->sei = ngx_create_temp_buf(s->connection->pool,
+                                           NGX_RTMP_HLS_SEI_BUFSIZE);
+            if (ctx->sei == NULL) {
+                return NGX_ERROR;
+            }
+        }
+
+        if ((size_t) (ctx->sei->end - ctx->sei->last) < n) {
+            ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
+                          "hls: SEI buffer full, dropping %uz byte(s)", n);
+            return NGX_OK;
+        }
+
+        ctx->sei->last = ngx_cpymem(ctx->sei->last, payload, n);
+
+        return NGX_OK;
     }
 
     ngx_memzero(&frame, sizeof(frame));
