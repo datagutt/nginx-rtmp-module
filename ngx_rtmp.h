@@ -621,7 +621,15 @@ ngx_rtmp_get_video_frame_type(ngx_chain_t *in)
 }
 
 static ngx_inline ngx_int_t
-ngx_rtmp_is_codec_header(ngx_chain_t *in)
+ngx_rtmp_is_audio_codec_header(ngx_chain_t *in)
+{
+    return in->buf->pos + 1 < in->buf->last && in->buf->pos[1] == 0;
+}
+
+/* Enhanced RTMP flags its header with the top bit of the first byte, which
+ * every AAC tag (0xAF) has set too, so audio needs the check above. */
+static ngx_inline ngx_int_t
+ngx_rtmp_is_video_codec_header(ngx_chain_t *in)
 {
     uint8_t first_byte = in->buf->pos[0];
     uint8_t first_4_bits = first_byte >> 4;  // Get the first 4 bits

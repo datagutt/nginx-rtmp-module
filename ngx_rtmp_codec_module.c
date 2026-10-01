@@ -305,7 +305,9 @@ ngx_rtmp_codec_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     }
 
     /* no conf */
-    if ((h->type == NGX_RTMP_MSG_VIDEO && !ngx_rtmp_is_codec_header(in)) || (h->type == NGX_RTMP_MSG_AUDIO && ( in->buf->pos + 1 < in->buf->last && in->buf->pos[1] != 0)))  {
+    if ((h->type == NGX_RTMP_MSG_VIDEO && !ngx_rtmp_is_video_codec_header(in))
+        || (h->type == NGX_RTMP_MSG_AUDIO && !ngx_rtmp_is_audio_codec_header(in)))
+    {
         if (in->buf->last - in->buf->pos >= 5) {
             ngx_log_debug5(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                            "codec: not a codec header, first 5 bytes: %02xd %02xd %02xd %02xd %02xd",
