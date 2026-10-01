@@ -240,10 +240,30 @@ ngx_rtmp_recv(ngx_event_t *rev)
             ngx_log_debug1(NGX_LOG_DEBUG_RTMP, c->log, 0,
                     "reusing formerly read data: %d", old_size);
 
-            b->pos = b->start;
+            if ((size_t) (b->end - b->start) < old_size) {
 
-            size = ngx_min((size_t) (b->end - b->start), old_size);
-            b->last = ngx_movemem(b->pos, old_pos, size);
+                /*
+                 * After the peer shrinks its chunk size, new buffers are
+                 * smaller than the data already read with the old size.
+                 * Dropping the excess would desync the chunk stream, so this
+                 * buffer grows instead, keeping room for one more chunk.
+                 */
+                size = old_size + s->in_chunk_size + NGX_RTMP_MAX_CHUNK_HEADER;
+
+                p = ngx_palloc(s->in_pool, size);
+                if (p == NULL) {
+                    ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                            "in buf alloc failed");
+                    ngx_rtmp_finalize_session(s);
+                    return;
+                }
+
+                b->start = p;
+                b->end = p + size;
+            }
+
+            b->pos = b->start;
+            b->last = ngx_movemem(b->pos, old_pos, old_size);
 
             if (s->in_chunk_size_changing) {
                 ngx_rtmp_finalize_set_chunk_size(s);
