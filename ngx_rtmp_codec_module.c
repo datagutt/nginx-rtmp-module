@@ -17,7 +17,7 @@
 #define NGX_RTMP_CODEC_META_COPY    2
 
 #define NGX_RTMP_CODEC_HEVC_NAL_SPS         33
-#define NGX_RTMP_CODEC_HEVC_HEADER_MAX      1024
+#define NGX_RTMP_CODEC_HEADER_MAX           1024
 
 
 static void * ngx_rtmp_codec_create_app_conf(ngx_conf_t *cf);
@@ -37,6 +37,8 @@ static void ngx_rtmp_codec_parse_hevc_header(ngx_rtmp_session_t *s,
        ngx_chain_t *in);
 static ngx_int_t ngx_rtmp_codec_parse_hevc_sps(ngx_rtmp_session_t *s,
        u_char *pos, u_char *last);
+static size_t ngx_rtmp_codec_flatten(ngx_chain_t *in, u_char *buf,
+       size_t size);
 
 
 #if (NGX_DEBUG)
@@ -454,6 +456,7 @@ ngx_rtmp_codec_parse_aac_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 static void
 ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 {
+    u_char                  buf[NGX_RTMP_CODEC_HEADER_MAX];
     ngx_uint_t              profile_idc, width, height, crop_left, crop_right,
                             crop_top, crop_bottom, frame_mbs_only, n, cf_n, cf_idc,
 //                            num_ref_frames;
@@ -468,7 +471,8 @@ ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
 
-    ngx_rtmp_bit_init_reader(&br, in->buf->pos, in->buf->last);
+    ngx_rtmp_bit_init_reader(&br, buf,
+                             buf + ngx_rtmp_codec_flatten(in, buf, sizeof(buf)));
 
     ngx_rtmp_bit_read(&br, 48);
 
@@ -487,8 +491,8 @@ ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
     /* nal size */
     ngx_rtmp_bit_read(&br, 16);
 
-    /* nal type */
-    if (ngx_rtmp_bit_read_8(&br) != 0x67) {
+    /* nal type, ignoring nal_ref_idc: DJI GO sends 0x27 instead of 0x67 */
+    if ((ngx_rtmp_bit_read_8(&br) & 0x1f) != 7) {
         return;
     }
 
@@ -658,12 +662,9 @@ ngx_rtmp_codec_parse_avc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 static void
 ngx_rtmp_codec_parse_hevc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 {
-    /* the message may span several chunks, and SPS usually sits right after
-     * VPS, well within this size */
-    u_char                  buf[NGX_RTMP_CODEC_HEVC_HEADER_MAX];
-    size_t                  n, len;
+    /* SPS usually sits right after VPS, well within this size */
+    u_char                  buf[NGX_RTMP_CODEC_HEADER_MAX];
     ngx_uint_t              narrays, nnalus, nal_type, nal_len, i, j;
-    ngx_chain_t            *cl;
     ngx_rtmp_codec_ctx_t   *ctx;
     ngx_rtmp_bit_reader_t   br;
 
@@ -673,13 +674,8 @@ ngx_rtmp_codec_parse_hevc_header(ngx_rtmp_session_t *s, ngx_chain_t *in)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
 
-    for (cl = in, n = 0; cl && n < sizeof(buf); cl = cl->next) {
-        len = ngx_min((size_t) (cl->buf->last - cl->buf->pos), sizeof(buf) - n);
-        ngx_memcpy(buf + n, cl->buf->pos, len);
-        n += len;
-    }
-
-    ngx_rtmp_bit_init_reader(&br, buf, buf + n);
+    ngx_rtmp_bit_init_reader(&br, buf,
+                             buf + ngx_rtmp_codec_flatten(in, buf, sizeof(buf)));
 
     /* Legacy (codec id 12) and enhanced RTMP sequence headers both carry
      * 5 bytes ahead of the HEVCDecoderConfigurationRecord: tag header,
@@ -759,7 +755,7 @@ static ngx_int_t
 ngx_rtmp_codec_parse_hevc_sps(ngx_rtmp_session_t *s, u_char *pos,
     u_char *last)
 {
-    u_char                  rbsp[NGX_RTMP_CODEC_HEVC_HEADER_MAX];
+    u_char                  rbsp[NGX_RTMP_CODEC_HEADER_MAX];
     size_t                  n;
     ngx_uint_t              zeros, max_sub_layers, profile_present,
                             level_present, chroma_format_idc, width, height,
@@ -882,6 +878,23 @@ ngx_rtmp_codec_parse_hevc_sps(ngx_rtmp_session_t *s, u_char *pos,
     ctx->height = height - sub_height * (crop_top + crop_bottom);
 
     return NGX_OK;
+}
+
+
+/* Sequence headers span several RTMP chunks whenever they are larger than the
+ * publisher's chunk size, while the bit reader needs contiguous memory. */
+static size_t
+ngx_rtmp_codec_flatten(ngx_chain_t *in, u_char *buf, size_t size)
+{
+    size_t  n, len;
+
+    for (n = 0; in && n < size; in = in->next) {
+        len = ngx_min((size_t) (in->buf->last - in->buf->pos), size - n);
+        ngx_memcpy(buf + n, in->buf->pos, len);
+        n += len;
+    }
+
+    return n;
 }
 
 
