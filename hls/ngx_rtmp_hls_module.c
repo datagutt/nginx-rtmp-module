@@ -695,7 +695,7 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s, int final)
 
     if (final)
     {
-        p = ngx_slprintf(p, end, "#EXT-X-ENDLIST\n");
+        p = ngx_slprintf(buffer, buffer + sizeof(buffer), "#EXT-X-ENDLIST\n");
         n = ngx_write_fd(fd, buffer, p - buffer);
         if (n < 0) {
             goto write_err;
